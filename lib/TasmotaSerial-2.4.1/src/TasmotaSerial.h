@@ -28,6 +28,9 @@
 #define TM_SERIAL_BAUDRATE           9600   // Default baudrate
 #define TM_SERIAL_BUFFER_SIZE        64     // Receive buffer size
 
+#define TM_SERIAL_RX_PULL_UP         0x01   // Serial receive pull up (bit)
+#define TM_SERIAL_TX_OPEN_DRAIN      0x02   // Serial transmit open drain (bit)
+
 #include <core_version.h>                   // Arduino_Esp8266 version information (ARDUINO_ESP8266_RELEASE and ARDUINO_ESP8266_RELEASE_2_3_0)
 #ifndef ARDUINO_ESP8266_RELEASE_2_3_0
   #define TM_SERIAL_USE_IRAM                // Enable to use iram (+368 bytes)
@@ -38,13 +41,15 @@
 
 class TasmotaSerial : public Stream {
   public:
-    TasmotaSerial(int receive_pin, int transmit_pin, int hardware_fallback = 0, int nwmode = 0, int buffer_size = TM_SERIAL_BUFFER_SIZE, bool tx_special_mode = false);
+    TasmotaSerial(int receive_pin, int transmit_pin, int hardware_fallback = 0, int nwmode = 0, int buffer_size = TM_SERIAL_BUFFER_SIZE, bool pin_smode = 0);
     virtual ~TasmotaSerial();
 
     bool begin(long speed, int stop_bits = 1);
     bool begin();
     bool hardwareSerial();
     int peek();
+
+    bool hasRxError();
 
     virtual size_t write(uint8_t byte);
     virtual int read();
@@ -80,7 +85,10 @@ class TasmotaSerial : public Stream {
     bool m_hardswap;
     bool m_high_speed = false;
     bool m_very_high_speed = false;   // above 100000 bauds
+
+    bool m_rx_pullup = false;         // pullup rx pin
     bool m_tx_sink = false;           // sink tx pin
+
     uint8_t *m_buffer;
 
     void _fast_write(uint8_t b);      // IRAM minimized version

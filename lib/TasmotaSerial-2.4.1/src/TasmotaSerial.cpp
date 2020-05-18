@@ -79,14 +79,15 @@ static void (*ISRList[16])() = {
       tms_isr_15
 };
 
-TasmotaSerial::TasmotaSerial(int receive_pin, int transmit_pin, int hardware_fallback, int nwmode, int buffer_size, bool tx_special_mode)
+TasmotaSerial::TasmotaSerial(int receive_pin, int transmit_pin, int hardware_fallback, int nwmode, int buffer_size, bool pin_smode)
 {
   m_valid = false;
   m_hardserial = false;
   m_hardswap = false;
   m_stop_bits = 1;
   m_nwmode = nwmode;
-  m_tx_sink = tx_special_mode;
+  m_rx_pullup = (pin_smode & TM_SERIAL_RX_PULL_UP) == TM_SERIAL_RX_PULL_UP;
+  m_tx_sink = (pin_smode & TM_SERIAL_TX_OPEN_DRAIN) == TM_SERIAL_TX_OPEN_DRAIN;
   serial_buffer_size = buffer_size;
   if (!((isValidGPIOpin(receive_pin)) && (isValidGPIOpin(transmit_pin) || transmit_pin == 16))) {
     return;
@@ -108,7 +109,7 @@ TasmotaSerial::TasmotaSerial(int receive_pin, int transmit_pin, int hardware_fal
       // Use getCycleCount() loop to get as exact timing as possible
       m_bit_time = ESP.getCpuFreqMHz() * 1000000 / TM_SERIAL_BAUDRATE;
       m_bit_start_time = m_bit_time + m_bit_time/3 - 500; // pre-compute first wait
-      pinMode(m_rx_pin, INPUT);
+      pinMode(m_rx_pin, (m_rx_pullup) ? INPUT_PULLUP : INPUT);
       tms_obj_list[m_rx_pin] = this;
 #if defined(ARDUINO_ESP8266_RELEASE_2_3_0) || defined(ARDUINO_ESP8266_RELEASE_2_4_2) || defined(ARDUINO_ESP8266_RELEASE_2_5_2)
       attachInterrupt(m_rx_pin, ISRList[m_rx_pin], (m_nwmode) ? CHANGE : FALLING);
@@ -187,6 +188,10 @@ int TasmotaSerial::peek() {
     if ((-1 == m_rx_pin) || (m_in_pos == m_out_pos)) return -1;
     return m_buffer[m_out_pos];
   }
+}
+
+bool TasmotaSerial::hasRxError() {
+  return (m_hardserial && Serial.hasRxError());
 }
 
 int TasmotaSerial::read()

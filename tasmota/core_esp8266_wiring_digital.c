@@ -53,8 +53,6 @@ extern void __pinMode(uint8_t pin, uint8_t mode) {
       GPC(pin) = (GPC(pin) & (0xF << GPCI)); //SOURCE(GPIO) | DRIVER(NORMAL) | INT_TYPE(UNCHANGED) | WAKEUP_ENABLE(DISABLED)
       if(mode == OUTPUT_OPEN_DRAIN) {
         GPC(pin) |= (1 << GPCD);
-      } else {                      // <--- probably unnecessary - testing only -
-        GPC(pin) &= ~(1 << GPCD);
       }
       GPES = (1 << pin); //Enable
     } else if(mode == INPUT || mode == INPUT_PULLUP){

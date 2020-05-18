@@ -132,8 +132,9 @@ enum UserSelectablePins {
   GPIO_RFSEND,         // RF transmitter
   GPIO_RFRECV,         // RF receiver
   GPIO_TUYA_TX,        // Tuya Serial interface
-  GPIO_TUYA_TXS,       // Tuya Serial interface Special Mode
+  GPIO_TUYA_TXS,       // Tuya Serial interface special mode
   GPIO_TUYA_RX,        // Tuya Serial interface
+  GPIO_TUYA_RXS,       // Tuya Serial interface special mode
   GPIO_MGC3130_XFER,   // MGC3130 Transfer
   GPIO_MGC3130_RESET,  // MGC3130 Reset
   GPIO_SSPI_MISO,      // Software SPI Master Input Slave Output
@@ -274,7 +275,7 @@ const char kSensorNames[] PROGMEM =
   D_SENSOR_HX711_SCK "|" D_SENSOR_HX711_DAT "|"
   D_SENSOR_TX2X_TX "|"
   D_SENSOR_RFSEND "|" D_SENSOR_RFRECV "|"
-  D_SENSOR_TUYA_TX "|" D_SENSOR_TUYA_TXS "|" D_SENSOR_TUYA_RX "|"
+  D_SENSOR_TUYA_TX "|" D_SENSOR_TUYA_TXS "|" D_SENSOR_TUYA_RX "|" D_SENSOR_TUYA_RXS "|"
   D_SENSOR_MGC3130_XFER "|" D_SENSOR_MGC3130_RESET "|"
   D_SENSOR_SSPI_MISO "|" D_SENSOR_SSPI_MOSI "|" D_SENSOR_SSPI_SCLK "|" D_SENSOR_SSPI_CS "|" D_SENSOR_SSPI_DC "|"
   D_SENSOR_RF_SENSOR "|"
@@ -611,6 +612,7 @@ const uint8_t kGpioNiceList[] PROGMEM = {
   GPIO_TUYA_TX,        // Tuya Serial interface
   GPIO_TUYA_TXS,       // Tuya Serial interface special mode
   GPIO_TUYA_RX,        // Tuya Serial interface
+  GPIO_TUYA_RXS,       // Tuya Serial interface special mode
 #endif
 #ifdef USE_EXS_DIMMER
   GPIO_EXS_ENABLE,     // EXS MCU Enable
