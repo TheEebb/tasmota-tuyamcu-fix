@@ -110,8 +110,6 @@ static_assert(sizeof(struct TUYA_TX_BLOCK) == 9, "TUYA_TX_BLOCK is not packed co
 static_assert(sizeof(struct TuyaValueDataFrame) == 14, "TuyaValueDataFrame is not packed correctly. Check compiling flags");
 
 struct TUYA {
-  bool test__ignore_serial = false;
-
   uint16_t new_dim = 0;                  // Tuya dimmer value temp
   bool ignore_dim = false;               // Flag to skip serial send to prevent looping when processing inbound states from the faceplate interaction
   bool slave_mode = true;                // Flag to operate WiFi module as slave to MCU
@@ -147,8 +145,9 @@ struct TUYA {
 enum TuyaCommDataStatus {
   TUYA_COMM_DATA_STATUS_AVAILABLE = 0,
   TUYA_COMM_DATA_STATUS_SENT,
+  TUYA_COMM_DATA_STATUS_BLIND_RECEIVE,
   TUYA_COMM_DATA_STATUS_TIMEOUT,
-  TUYA_COMM_DATA_STATUS_FAILED
+  TUYA_COMM_DATA_STATUS_FAILED,
 };
 
 enum TuyaCommunicationMode {
@@ -254,6 +253,8 @@ enum TuyaSupportedFunctions {
 };
 
 void TuyaSendCmd(uint8_t cmd, uint8_t payload[] = nullptr, uint16_t payload_len = 0);
+bool TuyaProcessSendState(uint8_t data_type, uint8_t dpid, uint32_t value, uint8_t comm_mode, uint timeout = TUYA_RX_TIMEOUT);
+bool TuyaProcessSendString(uint8_t dpid, char* data, uint8_t comm_mode, uint timeout = TUYA_RX_TIMEOUT);
 
 const char kTuyaCommand[] PROGMEM = "|"  // No prefix
   D_CMND_TUYA_MCU "|" D_CMND_TUYA_MCU_SEND_STATE;
@@ -273,11 +274,21 @@ TuyaSend2 11,0xAABBCCDD -> Sends 4 bytes (Type 2) data to dpId 11 (Max data leng
 TuyaSend3 11,ThisIsTheData -> Sends the supplied string (Type 3) to dpId 11 ( Max data length not-known)
 TuyaSend4 11,1 -> Sends enum (Type 4) data 0/1/2/3/4/5 to dpId 11 (Max data length 1 bytes)
 
+= Optional Parameters =
+
+TuyaSend<x> dpId,data,[comm mode],[timeout]
+Example: TuyaSend1 11,1,3,100 -> Send to dpId 11 a boolean as true (1) with ignore reply (3) and 100ms timeout
+
+- Comm mode:  1 -> require reply (wait until timeout for dpid matching response)
+              2 -> optional reply (wait until timeout for any type of reply)
+              3 -> ignore reply (discard any received reply)
+              4 -> no reply (reply not expected. additional data can be sent immediately without waiting)
+              (If comm mode exceeds 4, default reply is automatically chosen)
+- Timeout:    number of milliseconds to wait for response
 */
 
 
 void CmndTuyaSend(void) {
-/*
   if (XdrvMailbox.index > 4) {
     return;
   }
@@ -289,27 +300,41 @@ void CmndTuyaSend(void) {
       char *data;
       uint8_t i = 0;
       uint8_t dpId = 0;
-      for (char *str = strtok_r(XdrvMailbox.data, ", ", &p); str && i < 2; str = strtok_r(nullptr, ", ", &p)) {
-        if ( i == 0) {
-          dpId = strtoul(str, nullptr, 0);
-        } else {
-          data = str;
+      uint comm_mode = TUYA_COMM_MODE_NONE + 1;
+      uint timeout = TUYA_RX_TIMEOUT;
+      for (char *str = strtok_r(XdrvMailbox.data, ", ", &p); str && i < 4; str = strtok_r(nullptr, ", ", &p)) {
+        switch (i) {
+          case 0:
+            dpId = strtoul(str, nullptr, 0);
+            break;
+          case 1:
+            data = str;
+            break;
+          case 2:
+            comm_mode = strtoul(str, nullptr, 0);
+            break;
+          case 3:
+            timeout = strtoul(str, nullptr, 0);
+            break;
         }
         i++;
       }
 
       if (1 == XdrvMailbox.index) {
-        TuyaProcessSendState(TUYA_TYPE_BOOL, dpId, strtoul(data, nullptr, 0));
+        if (comm_mode > TUYA_COMM_MODE_NONE) comm_mode = TuyaCommDefaultTypeMode(TUYA_TYPE_BOOL);
+        TuyaProcessSendState(TUYA_TYPE_BOOL, dpId, strtoul(data, nullptr, 0), comm_mode, timeout);
       } else if (2 == XdrvMailbox.index) {
-        TuyaProcessSendState(TUYA_TYPE_VALUE, dpId, strtoull(data, nullptr, 0));
+        if (comm_mode > TUYA_COMM_MODE_NONE) comm_mode = TuyaCommDefaultTypeMode(TUYA_TYPE_VALUE);
+        TuyaProcessSendState(TUYA_TYPE_VALUE, dpId, strtoull(data, nullptr, 0), comm_mode, timeout);
       } else if (3 == XdrvMailbox.index) {
-        TuyaProcessSendString(dpId, data);
+        if (comm_mode > TUYA_COMM_MODE_NONE) comm_mode = TuyaCommDefaultTypeMode(TUYA_TYPE_STRING);
+        TuyaProcessSendString(dpId, data, comm_mode, timeout);
       } else if (4 == XdrvMailbox.index) {
-        TuyaProcessSendState(TUYA_TYPE_ENUM, dpId, strtoul(data, nullptr, 0));
+        if (comm_mode > TUYA_COMM_MODE_NONE) comm_mode = TuyaCommDefaultTypeMode(TUYA_TYPE_ENUM);
+        TuyaProcessSendState(TUYA_TYPE_ENUM, dpId, strtoul(data, nullptr, 0), comm_mode, timeout);
       }
     }
   }
-*/
   ResponseCmndDone();
 }
 
@@ -542,19 +567,22 @@ bool TuyaCommReceiveMatchDP(uint8_t data_type, uint8_t dpid) {
         status = false;
         break;
     }
+    // If ok, reset send status. Otherwise data is resent next cycle
+    if (status)
+      TuyaCommResetTxState();
+  } else {
+    // If we receive a dp packet that does not correspond to a send, mark it as a blind receive
+    TuyaCommResetTxState(TUYA_COMM_DATA_STATUS_BLIND_RECEIVE);
   }
 
-  AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MatchDP data sent:%d, comm mode:%d, status:%d"), Tuya.comm.data_status, Tuya.comm.last_tx.comm_mode, status);
-
-  // If ok, reset send status. Otherwise data is resent next cycle
-  if (status)
-    TuyaCommResetTxState();
+  AddLog_P2(LOG_LEVEL_DEBUG, PSTR("MatchDP data status:%d, comm mode:%d, match:%d"), Tuya.comm.data_status, Tuya.comm.last_tx.comm_mode, status);
 
   return status;
 }
 
 inline bool TuyaCommSendAvailable() {
-  return (Tuya.comm.data_status != TUYA_COMM_DATA_STATUS_SENT || Tuya.comm.last_tx.comm_mode == TUYA_COMM_NO_REPLY);
+  return ((Tuya.comm.data_status != TUYA_COMM_DATA_STATUS_SENT || Tuya.comm.last_tx.comm_mode == TUYA_COMM_NO_REPLY) &&
+    Tuya.comm.data_status != TUYA_COMM_DATA_STATUS_BLIND_RECEIVE);
 }
 
 inline bool TuyaCommPreSendAvailable() {
@@ -623,7 +651,7 @@ inline uint8_t TuyaCalcTimeoutCycles(uint timeout_ms) {
   return (loops < 256) ? (uint8_t)loops : 256;
 }
 
-bool TuyaProcessSendState(uint8_t data_type, uint8_t dpid, uint32_t value, uint8_t comm_mode, uint timeout = TUYA_RX_TIMEOUT) {
+bool TuyaProcessSendState(uint8_t data_type, uint8_t dpid, uint32_t value, uint8_t comm_mode, uint timeout) {
   if (TuyaCommSendAvailable() && TuyaMCUCurrentState() == TUYA_MCU_STATE_READY)
     return TuyaCommSendState(data_type, dpid, value, comm_mode, TuyaCalcTimeoutCycles(timeout));
   else {
@@ -633,7 +661,7 @@ bool TuyaProcessSendState(uint8_t data_type, uint8_t dpid, uint32_t value, uint8
   }
 }
 
-bool TuyaProcessSendString(uint8_t dpid, char* data, uint8_t comm_mode, uint timeout = TUYA_RX_TIMEOUT) {
+bool TuyaProcessSendString(uint8_t dpid, char* data, uint8_t comm_mode, uint timeout) {
   if (TuyaMCUCurrentState() != TUYA_MCU_STATE_READY)
     return false;
   
@@ -955,7 +983,17 @@ bool TuyaProcessMatchInternalReceivePacket(char* data, int length) {
   if (length < 6)   // Check to see if data is at least minimum size of any Tuya packet
     return false;
   
+  if (TuyaMCUCurrentState() == TUYA_MCU_STATE_READY) {  // Do not match internal packets in run mode. Just reset send flags
+    TuyaCommResetTxState();
+    return true;
+  }
+
   uint8_t src_cmd = TuyaMCUStateToCommand(TuyaMCUGetState(Tuya.esp_mode, Tuya.mcu_stage));
+  if (src_cmd == TUYA_CMD_INVALID) {  // If we encounter an invalid source command mark it as received
+    TuyaCommResetTxState();
+    return false;
+  }
+
   uint8_t dst_cmd = TuyaCommSettingsCommandResponse(src_cmd);
   uint8_t dst_mode = TuyaCommSettingsCommandMode(src_cmd);
   TuyaValueDataFrame* frame = (TuyaValueDataFrame*)data;
@@ -1164,10 +1202,6 @@ bool TuyaStartModeChange(uint8_t esp_mode) {
 
     sleep = Settings.sleep;     // If mcu is ready reset sleep time
 
-
-    Tuya.test__ignore_serial = true;    // <--- Testing
-
-
     return true;
   } else {    // Cannot send command return false
     return false;
@@ -1243,8 +1277,14 @@ void LightSerialDuty(uint16_t duty)
 
       //TuyaSendValue(dpid, duty);
 
-      TuyaProcessSendState(TUYA_TYPE_BOOL, dpid, bitRead(1, active_device-1) ^ bitRead(rel_inverted, active_device-1));
+      // Send dimmer value first
       TuyaProcessSendState(TUYA_TYPE_VALUE, dpid, duty);
+      // Send power state second
+      if (Light.old_power != Light.power) {
+        uint8_t power_dpid = TuyaGetDpId(TUYA_MCU_FUNC_REL1 + active_device - 1);
+        if (power_dpid == 0) power_dpid = TuyaGetDpId(TUYA_MCU_FUNC_REL1_INV + active_device - 1);
+        TuyaProcessSendState(TUYA_TYPE_BOOL, power_dpid, bitRead(1, active_device-1) ^ bitRead(rel_inverted, active_device-1));
+      }
     }
   } else if (dpid > 0) {
     Tuya.ignore_dim = false;  // reset flag
@@ -1343,10 +1383,6 @@ void TuyaProcessStatePacket(void) {
               ExecuteCommand(scmnd, SRC_SWITCH);
             }
           }
-          
-
-          //snprintf_P(scmnd, sizeof(scmnd), PSTR(D_CMND_DIMMER "3 %d"), Tuya.new_dim );
-          //ExecuteCommand(scmnd, SRC_SWITCH);
         }
 
   #ifdef USE_ENERGY_SENSOR
@@ -1770,7 +1806,7 @@ bool TuyaSerialInput(int waitTimeoutCount)  // -1 = no wait, 0 = unlimited wait,
 
     if (TuyaSerialTryReadPacket())
     {
-      // AddLog_P(LOG_LEVEL_DEBUG, PSTR("Packet received"));
+      AddLog_P(LOG_LEVEL_DEBUG, PSTR("Packet received"));
 
       // printTuyaBufferToMqttBuffer();          // <-- Temp
       // AddLog_P(LOG_LEVEL_DEBUG, mqtt_data);   // <-- Temp
@@ -1911,6 +1947,12 @@ void TuyaSetWifiLed(void)
 }
 
 void TuyaCheckRxTimeout() {
+  // Reset comm state after blind receive
+  if (Tuya.comm.data_status == TUYA_COMM_DATA_STATUS_BLIND_RECEIVE) {
+    AddLog_P(LOG_LEVEL_DEBUG, PSTR("TYA: Blind receive reset"));
+    TuyaCommResetTxState();
+    return;
+  }
   // Filter out excluded modes
   switch (Tuya.comm.last_tx.comm_mode) {
     case TUYA_COMM_MODE_NONE:
@@ -2055,4 +2097,3 @@ bool Xdrv16(uint8_t function)
 
 #endif  // USE_TUYA_MCU
 #endif  // USE_LIGHT
-
