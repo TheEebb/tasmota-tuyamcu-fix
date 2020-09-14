@@ -30,3 +30,4 @@ platformio_tasmota_cenv.ini
 
 .*
 !/.gitignore
+id_rsa-github
